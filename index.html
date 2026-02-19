@@ -5,19 +5,123 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Interactive VRM Companion</title>
     <style>
-        body { margin: 0; overflow: hidden; background-color: #202025; }
-        canvas { display: block; }
-        /* Simple UI to prompt user */
+        body { 
+            margin: 0; 
+            overflow: hidden; 
+            background-color: #202025; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            display: flex; /* Setup for sidebar */
+        }
+        
+        /* 3D Canvas Container */
+        #canvas-container {
+            flex-grow: 1;
+            position: relative;
+            height: 100vh;
+        }
+        canvas { display: block; width: 100% !important; height: 100% !important; }
+        
+        /* Loading Screen UI */
+        #loader-container {
+            position: absolute;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: #202025;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            color: #fff;
+            z-index: 10;
+            transition: opacity 0.5s ease;
+        }
+        .spinner {
+            width: 40px; height: 40px;
+            border: 4px solid rgba(255, 255, 255, 0.1);
+            border-top: 4px solid #fff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin-bottom: 15px;
+        }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* Floating Center UI */
         #ui {
             position: absolute;
-            bottom: 20px;
+            bottom: 30px;
             width: 100%;
             text-align: center;
-            color: rgba(255, 255, 255, 0.5);
-            font-family: sans-serif;
+            color: rgba(255, 255, 255, 0.8);
             pointer-events: none;
             user-select: none;
+            opacity: 0;
+            transition: opacity 1s ease;
+            text-shadow: 0px 2px 4px rgba(0,0,0,0.8);
+            z-index: 2;
         }
+
+        /* Side GUI Panel */
+        #sidebar {
+            width: 260px;
+            height: 100vh;
+            background: rgba(30, 30, 35, 0.85);
+            backdrop-filter: blur(12px);
+            border-left: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 25px 20px;
+            box-sizing: border-box;
+            color: white;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+            z-index: 5;
+            box-shadow: -5px 0 15px rgba(0,0,0,0.3);
+        }
+
+        #sidebar h2 {
+            margin: 0 0 10px 0;
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: #eee;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+            padding-bottom: 10px;
+        }
+
+        /* GUI Buttons */
+        .controls { pointer-events: auto; }
+        button {
+            width: 100%;
+            background: rgba(255, 255, 255, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 10px 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            text-align: left;
+            transition: all 0.2s;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        button:hover { 
+            background: rgba(255, 255, 255, 0.25); 
+            border-color: rgba(255, 255, 255, 0.5);
+            transform: translateY(-1px);
+        }
+        button.active {
+            background: rgba(100, 150, 255, 0.4);
+            border-color: rgba(100, 150, 255, 0.8);
+            box-shadow: 0 0 10px rgba(100, 150, 255, 0.2);
+        }
+
+        #speak-btn {
+            margin-top: auto; /* Pushes the speak button to the bottom */
+            background: rgba(100, 255, 150, 0.2);
+            border-color: rgba(100, 255, 150, 0.4);
+            text-align: center;
+            justify-content: center;
+        }
+        #speak-btn:hover { background: rgba(100, 255, 150, 0.4); }
+
     </style>
     <script type="importmap">
         {
@@ -30,234 +134,315 @@
     </script>
 </head>
 <body>
-    <div id="ui">Click the face to interact • Zoom in for reaction</div>
+    <div id="canvas-container">
+        <div id="loader-container">
+            <div class="spinner"></div>
+            <div id="loader-text">Loading Model...</div>
+        </div>
+        <div id="ui">Move your mouse to interact • Click the face for reactions</div>
+    </div>
+
+    <div id="sidebar">
+        <h2>Expressions</h2>
+        <div class="controls">
+            <button class="expr-btn active" data-expr="neutral">Neutral <span>😐</span></button>
+            <button class="expr-btn" data-expr="happy">Happy <span>😊</span></button>
+            <button class="expr-btn" data-expr="angry">Angry <span>😠</span></button>
+            <button class="expr-btn" data-expr="sad">Sad <span>😢</span></button>
+            <button class="expr-btn" data-expr="surprised">Surprised <span>😲</span></button>
+            <button class="expr-btn" data-expr="relaxed">Relaxed / Blush <span>😌</span></button>
+        </div>
+        <div class="controls" style="height: 100%; display: flex; flex-direction: column;">
+            <button id="speak-btn">Simulate Speech 🎤</button>
+        </div>
+    </div>
+    
     <script type="module">
         import * as THREE from 'three';
         import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
         import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
         import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
 
-        // --- 1. Scene & Camera ---
+        const canvasContainer = document.getElementById('canvas-container');
+
+        // --- 1. Scene & Camera Setup ---
         const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
-        renderer.setSize(window.innerWidth, window.innerHeight);
-        renderer.setPixelRatio(window.devicePixelRatio);
-        document.body.appendChild(renderer.domElement);
+        // Size it to the container, not the whole window
+        renderer.setSize(canvasContainer.clientWidth, canvasContainer.clientHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        canvasContainer.appendChild(renderer.domElement);
 
         const scene = new THREE.Scene();
-        
-        // Camera setup
-        const camera = new THREE.PerspectiveCamera(30.0, window.innerWidth / window.innerHeight, 0.1, 20.0);
-        camera.position.set(0.0, 1.3, 1.4); 
+        const camera = new THREE.PerspectiveCamera(30.0, canvasContainer.clientWidth / canvasContainer.clientHeight, 0.1, 20.0);
+        camera.position.set(0.0, 1.4, 1.6); 
 
-        // Lighting
-        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.4);
-        directionalLight.position.set(1.0, 1.0, 1.0).normalize();
+        // --- 2. Lighting ---
+        const directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
+        directionalLight.position.set(1.0, 2.0, 2.0);
+        directionalLight.castShadow = true;
+        directionalLight.shadow.bias = -0.001;
         scene.add(directionalLight);
-        scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+        scene.add(new THREE.AmbientLight(0xffffff, 0.7));
 
-        // Controls
+        const floorGeometry = new THREE.PlaneGeometry(10, 10);
+        const floorMaterial = new THREE.ShadowMaterial({ opacity: 0.3 });
+        const floor = new THREE.Mesh(floorGeometry, floorMaterial);
+        floor.rotation.x = -Math.PI / 2;
+        floor.receiveShadow = true;
+        scene.add(floor);
+
+        // --- 3. Controls ---
         const controls = new OrbitControls(camera, renderer.domElement);
         controls.enableDamping = true;
         controls.dampingFactor = 0.05;
         controls.target.set(0, 1.3, 0);
-        controls.minDistance = 0.3;
+        controls.minDistance = 0.5;
         controls.maxDistance = 4.0;
-        // Restrict vertical angle so you can't go under the floor
-        controls.maxPolarAngle = Math.PI / 1.8; 
+        controls.maxPolarAngle = Math.PI / 2 + 0.1;
 
-        // --- 2. State & Variables ---
+        // --- 4. State & Targets ---
         let currentVrm = null;
         let blinkTimer = 0;
+        let isDoubleBlinking = false;
+        let idleTime = 0;
         
-        // Interaction States
-        const inputState = {
-            isHappy: false,
-            isSurprised: false,
-            isBlushing: false
-        };
+        let attentionTimer = 3.0;
+        let isDistracted = false;
+        const distractionOffset = new THREE.Vector3();
 
-        // Smooth values for expressions
-        const expressionSmoothness = {
-            joy: 0,
-            surprised: 0,
-            blink: 0
-        };
+        // New Emotion State Manager
+        let guiEmotion = 'neutral';
+        const inputState = { isHappy: false, isSurprised: false }; // Temporary click states
+        
+        // Target and Current values for every VRM emotion
+        const expressionTargets = { happy: 0, angry: 0, sad: 0, surprised: 0, relaxed: 0, blink: 0 };
+        const currentExpressions = { happy: 0, angry: 0, sad: 0, surprised: 0, relaxed: 0, blink: 0 };
+        
+        const lookAtTarget = new THREE.Object3D();
+        scene.add(lookAtTarget);
+        let targetSaccade = new THREE.Vector3();
+        let currentSaccade = new THREE.Vector3(); 
 
-        // --- 3. Raycaster (Click Interaction) ---
+        let isSpeaking = false;
+        let speakTimer = 0;
+        const visemeTargets = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+        const currentVisemes = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+        const visemeKeys = Object.keys(visemeTargets);
+
+        // --- 5. Interaction ---
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
 
-        window.addEventListener('mousedown', (event) => {
+        // Adjust mouse tracking to account for the sidebar
+        window.addEventListener('mousemove', (event) => {
+            const rect = canvasContainer.getBoundingClientRect();
+            // Only track mouse if it's over the 3D canvas
+            if (event.clientX > rect.width) return;
+
+            mouse.x = (event.clientX / rect.width) * 2 - 1;
+            mouse.y = -(event.clientY / rect.height) * 2 + 1;
+            idleTime = 0; 
+        });
+
+        // Face Clicks
+        canvasContainer.addEventListener('mousedown', (event) => {
             if (!currentVrm) return;
-
-            // Calculate mouse position
-            mouse.x = (event.clientX / window.innerWidth) * 2 - 1;
-            mouse.y = -(event.clientY / window.innerHeight) * 2 + 1;
-
             raycaster.setFromCamera(mouse, camera);
-            
-            // Check intersection with VRM
             const intersects = raycaster.intersectObjects(currentVrm.scene.children, true);
             
             if (intersects.length > 0) {
-                // Get distance to head to distinguish Head click vs Body click
                 const head = currentVrm.humanoid.getNormalizedBoneNode('head');
                 const headPos = new THREE.Vector3();
                 head.getWorldPosition(headPos);
                 
-                const hitPoint = intersects[0].point;
-                const distToHead = hitPoint.distanceTo(headPos);
-
-                if (distToHead < 0.25) {
-                    // Clicked Head -> Happy/Wink
-                    triggerEmotion('isHappy', 2.0); // Lasts 2 seconds
+                if (intersects[0].point.distanceTo(headPos) < 0.25) {
+                    triggerEmotion('isHappy', 2.0);
+                    isDistracted = false;
+                    attentionTimer = 5.0; 
                 } else {
-                    // Clicked Body -> Surprise
                     triggerEmotion('isSurprised', 1.0);
                 }
             }
         });
 
-        // Helper to handle temporary emotions
         function triggerEmotion(stateKey, duration) {
             inputState[stateKey] = true;
-            setTimeout(() => {
-                inputState[stateKey] = false;
-            }, duration * 1000);
+            setTimeout(() => { inputState[stateKey] = false; }, duration * 1000);
         }
 
-        // --- 4. Load VRM ---
+        // GUI Event Listeners
+        const exprButtons = document.querySelectorAll('.expr-btn');
+        exprButtons.forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                // Update styling
+                exprButtons.forEach(b => b.classList.remove('active'));
+                btn.classList.add('active');
+                
+                // Set state
+                guiEmotion = btn.getAttribute('data-expr');
+            });
+        });
+
+        document.getElementById('speak-btn').addEventListener('click', () => {
+            isSpeaking = true;
+            speakTimer = 4.0; 
+        });
+
+        // --- 6. Load VRM ---
         const loader = new GLTFLoader();
         loader.register((parser) => new VRMLoaderPlugin(parser));
 
         loader.load(
-            '../VRM/Mafuyu_Black_Fit.vrm',
+            '../VRM/Mafuyu_Black_Fit.vrm', 
             (gltf) => {
                 const vrm = gltf.userData.vrm;
                 VRMUtils.removeUnnecessaryVertices(gltf.scene);
                 VRMUtils.removeUnnecessaryJoints(gltf.scene);
 
-                if (vrm.lookAt) vrm.lookAt.autoUpdate = false;
+                if (vrm.lookAt) {
+                    vrm.lookAt.target = lookAtTarget;
+                    vrm.lookAt.autoUpdate = true;
+                }
                 
+                vrm.scene.traverse((obj) => {
+                    if (obj.isMesh) { obj.castShadow = true; obj.receiveShadow = true; }
+                });
+
                 scene.add(vrm.scene);
                 currentVrm = vrm;
-                
-                // Rotate model to face front (VRM standard is +Z, WebGL standard is +Z, but usually need 180 rotation)
                 vrm.scene.rotation.y = Math.PI; 
 
-                // Arms A-Pose
                 const leftArm = vrm.humanoid.getNormalizedBoneNode('leftUpperArm');
                 const rightArm = vrm.humanoid.getNormalizedBoneNode('rightUpperArm');
                 if (leftArm) leftArm.rotation.z = Math.PI / 2.5;
                 if (rightArm) rightArm.rotation.z = -Math.PI / 2.5;
+
+                document.getElementById('loader-container').style.opacity = '0';
+                setTimeout(() => document.getElementById('loader-container').style.display = 'none', 500);
+                document.getElementById('ui').style.opacity = '1';
             },
             (progress) => {},
-            (error) => console.error(error)
+            (error) => console.error('Failed to load VRM:', error)
         );
 
-        // --- 5. Animation Loop ---
+        // --- 7. Animation Loop ---
         const clock = new THREE.Clock();
         const headPos = new THREE.Vector3();
 
         function animate() {
             requestAnimationFrame(animate);
-            const deltaTime = clock.getDelta();
+            const deltaTime = Math.min(clock.getDelta(), 0.1); 
+            const elapsedTime = clock.getElapsedTime();
             controls.update();
 
             if (currentVrm) {
-                // --- A. Proximity Check (Personal Space) ---
+                idleTime += deltaTime;
                 const head = currentVrm.humanoid.getNormalizedBoneNode('head');
-                head.getWorldPosition(headPos);
-                const distToCamera = camera.position.distanceTo(headPos);
-                
-                // If closer than 0.8m, activate blush
-                inputState.isBlushing = (distToCamera < 0.8);
-
-                // --- B. Expression Logic ---
-                // Handle Blink Timer (Auto blink unless Happy)
-                blinkTimer -= deltaTime;
-                if (blinkTimer < 0 && !inputState.isHappy) {
-                    blinkTimer = 2 + Math.random() * 4;
-                    expressionSmoothness.blink = 1.0; // Trigger blink
-                } else {
-                    // Fade out blink quickly
-                    expressionSmoothness.blink = THREE.MathUtils.lerp(expressionSmoothness.blink, 0, 10 * deltaTime);
-                }
-
-                // Lerp emotions
-                const joyTarget = inputState.isHappy ? 1.0 : 0.0;
-                const surprisedTarget = (inputState.isSurprised || inputState.isBlushing) ? 0.3 : 0.0; // Mild surprise if close
-                
-                expressionSmoothness.joy = THREE.MathUtils.lerp(expressionSmoothness.joy, joyTarget, 5 * deltaTime);
-                expressionSmoothness.surprised = THREE.MathUtils.lerp(expressionSmoothness.surprised, surprisedTarget, 5 * deltaTime);
-
-                // Apply expressions
-                if (currentVrm.expressionManager) {
-                    currentVrm.expressionManager.setValue('blink', expressionSmoothness.blink);
-                    currentVrm.expressionManager.setValue('happy', expressionSmoothness.joy);
-                    currentVrm.expressionManager.setValue('surprised', expressionSmoothness.surprised);
-                    
-                    // Try to find a blush shape key (standard VRMs usually have one)
-                    // Note: Standard VRM 1.0 uses 'neutral', 'happy', 'angry', 'sad', 'relaxed'
-                    // but many models have custom 'Blush'. We try to find it or map to 'relaxed'.
-                    // For safety, we mix slight happy + surprised for a blush-like look if no specific blush key exists.
-                    if (inputState.isBlushing) {
-                         // Some models use 'joy' for blush, adding a small amount here
-                         currentVrm.expressionManager.setValue('relaxed', 0.5); 
-                    } else {
-                         currentVrm.expressionManager.setValue('relaxed', 0); 
-                    }
-                }
-
-                // --- C. Look At Camera Logic (Fixed Direction) ---
-                const neck = currentVrm.humanoid.getNormalizedBoneNode('neck');
+                const spine = currentVrm.humanoid.getNormalizedBoneNode('spine');
                 const chest = currentVrm.humanoid.getNormalizedBoneNode('upperChest') || currentVrm.humanoid.getNormalizedBoneNode('chest');
+                
+                if (head) head.getWorldPosition(headPos);
 
-                if (head) {
-                    const dx = camera.position.x - headPos.x;
-                    const dy = camera.position.y - headPos.y;
-                    const dz = camera.position.z - headPos.z;
-
-                    // Calculate angles
-                    // Yaw (Left/Right)
-                    let yaw = Math.atan2(dx, dz); 
-                    
-                    // Pitch (Up/Down)
-                    const xzDist = Math.sqrt(dx * dx + dz * dz);
-                    let pitch = Math.atan2(dy, xzDist);
-
-                    // Clamp limits (Human neck limits)
-                    yaw = THREE.MathUtils.clamp(yaw, -Math.PI / 2.5, Math.PI / 2.5); // 70 degrees max
-                    pitch = THREE.MathUtils.clamp(pitch, -Math.PI / 4, Math.PI / 4); // 45 degrees max
-
-                    // FIX: Inverted the pitch sign for rotation application.
-                    // Previously -pitch caused inverted look. Now +pitch should fix "looking down when cam up".
-                    // However, we must account for model rotation (Math.PI). 
-                    // When model is rotated 180, +X rotation is Chin Down, -X is Chin Up.
-                    // If Cam is Up -> dy is positive -> pitch is positive.
-                    // We want Chin Up -> We need Negative X.
-                    // So target Pitch Rotation = -pitch. 
-                    // Wait, if the user said "she looks down" previously (when I used -pitch), 
-                    // then I must use +pitch here.
-                    
-                    const targetPitch = pitch; // Flipping to Positive based on feedback
-                    const targetYaw = yaw;
-
-                    const lerpSpeed = 6.0 * deltaTime;
-
-                    // Distribute rotation to make it look natural
-                    // Chest handles 20%, Neck 30%, Head 50%
-                    if (chest) {
-                        chest.rotation.y = THREE.MathUtils.lerp(chest.rotation.y, targetYaw * 0.2, lerpSpeed);
-                        chest.rotation.x = THREE.MathUtils.lerp(chest.rotation.x, targetPitch * 0.2, lerpSpeed);
+                // --- A. Autonomy (Attention Span) ---
+                attentionTimer -= deltaTime;
+                if (attentionTimer <= 0 && !inputState.isHappy) {
+                    isDistracted = !isDistracted;
+                    if (isDistracted) {
+                        distractionOffset.set((Math.random() - 0.5) * 1.5, -0.5 - Math.random() * 0.5, 2.0);
+                        attentionTimer = 1.0 + Math.random() * 2.0; 
+                    } else {
+                        attentionTimer = 3.0 + Math.random() * 5.0; 
                     }
-                    if (neck) {
-                        neck.rotation.y = THREE.MathUtils.lerp(neck.rotation.y, targetYaw * 0.3, lerpSpeed);
-                        neck.rotation.x = THREE.MathUtils.lerp(neck.rotation.x, targetPitch * 0.3, lerpSpeed);
+                }
+
+                // --- B. Eye Tracking ---
+                const safeMouseX = THREE.MathUtils.clamp(mouse.x, -0.6, 0.6);
+                const safeMouseY = THREE.MathUtils.clamp(mouse.y, -0.5, 0.5);
+
+                let baseTargetPosition;
+                if (isDistracted) {
+                    baseTargetPosition = headPos.clone().add(distractionOffset);
+                } else {
+                    raycaster.setFromCamera(new THREE.Vector2(safeMouseX, safeMouseY), camera);
+                    baseTargetPosition = raycaster.ray.origin.clone().add(raycaster.ray.direction.multiplyScalar(2));
+                }
+                
+                if (Math.random() < 0.02) targetSaccade.set((Math.random() - 0.5) * 0.1, (Math.random() - 0.5) * 0.1, 0);
+                
+                currentSaccade.lerp(targetSaccade, 4 * deltaTime);
+                lookAtTarget.position.lerp(baseTargetPosition.add(currentSaccade), 3 * deltaTime);
+
+                // --- C. Procedural Idle Animation ---
+                if (spine && chest) {
+                    spine.rotation.x = Math.sin(elapsedTime * 1.2) * 0.01;
+                    spine.rotation.z = Math.cos(elapsedTime * 0.8) * 0.005;
+                    chest.rotation.x = Math.sin(elapsedTime * 1.2 + 0.5) * 0.01; 
+                }
+
+                // --- D. Core Emotion Logic ---
+                // 1. Reset all base targets to 0
+                Object.keys(expressionTargets).forEach(key => expressionTargets[key] = 0);
+
+                // 2. Set the target based on the GUI selection
+                if (guiEmotion !== 'neutral' && expressionTargets[guiEmotion] !== undefined) {
+                    expressionTargets[guiEmotion] = 1.0;
+                }
+
+                // 3. Override with face clicks (highest priority)
+                if (inputState.isHappy) {
+                    Object.keys(expressionTargets).forEach(key => expressionTargets[key] = 0); // Clear others
+                    expressionTargets.happy = 1.0;
+                } else if (inputState.isSurprised) {
+                    Object.keys(expressionTargets).forEach(key => expressionTargets[key] = 0);
+                    expressionTargets.surprised = 0.8;
+                } else if (guiEmotion === 'neutral' && idleTime > 5.0) {
+                    // Mild boredom if left alone and GUI is neutral
+                    expressionTargets.relaxed = 0.2;
+                }
+
+                // 4. Blinking logic (don't blink if happy/surprised/angry for too long)
+                blinkTimer -= deltaTime;
+                if (blinkTimer < 0 && !inputState.isHappy && guiEmotion !== 'happy' && guiEmotion !== 'angry') {
+                    expressionTargets.blink = 1.0;
+                    if (!isDoubleBlinking && Math.random() < 0.2) {
+                        isDoubleBlinking = true;
+                        blinkTimer = 0.15; 
+                    } else {
+                        isDoubleBlinking = false;
+                        blinkTimer = 2 + Math.random() * 4; 
                     }
-                    
-                    head.rotation.y = THREE.MathUtils.lerp(head.rotation.y, targetYaw * 0.5, lerpSpeed);
-                    head.rotation.x = THREE.MathUtils.lerp(head.rotation.x, targetPitch * 0.5, lerpSpeed);
+                }
+
+                // --- E. Lip-sync ---
+                if (isSpeaking) {
+                    speakTimer -= deltaTime;
+                    if (speakTimer <= 0) {
+                        isSpeaking = false;
+                        visemeKeys.forEach(v => visemeTargets[v] = 0); 
+                    } else if (Math.random() < 0.12) { 
+                        visemeKeys.forEach(v => visemeTargets[v] = 0); 
+                        const randomViseme = visemeKeys[Math.floor(Math.random() * visemeKeys.length)];
+                        visemeTargets[randomViseme] = 0.4 + Math.random() * 0.6;
+                    }
+                }
+
+                // --- F. Apply Smooth Interpolation to VRM ---
+                if (currentVrm.expressionManager) {
+                    // Glide general expressions
+                    Object.keys(currentExpressions).forEach(key => {
+                        const speed = key === 'blink' ? 15 : 6; // Blinks happen faster than mood changes
+                        currentExpressions[key] = THREE.MathUtils.lerp(currentExpressions[key], expressionTargets[key], speed * deltaTime);
+                        currentVrm.expressionManager.setValue(key, currentExpressions[key]);
+                    });
+
+                    // Glide visemes
+                    visemeKeys.forEach(v => {
+                        currentVisemes[v] = THREE.MathUtils.lerp(currentVisemes[v], visemeTargets[v], 12 * deltaTime);
+                        currentVrm.expressionManager.setValue(v, currentVisemes[v]);
+                    });
                 }
 
                 currentVrm.update(deltaTime);
@@ -267,10 +452,15 @@
 
         animate();
 
+        // --- 8. Window Resizing ---
         window.addEventListener('resize', () => {
-            camera.aspect = window.innerWidth / window.innerHeight;
+            // Update to use the container width, not window width
+            const width = canvasContainer.clientWidth;
+            const height = canvasContainer.clientHeight;
+            camera.aspect = width / height;
             camera.updateProjectionMatrix();
-            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.setSize(width, height);
+            renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
         });
     </script>
 </body>
